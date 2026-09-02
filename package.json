@@ -2,7 +2,7 @@
   "scripts": {
     "dev": "nodemon index.js",
     "seed": "node dbSeed.js",
-    "start": "node dbSeed.js && node index.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "axios": "^1.13.2",
@@ -10,7 +10,10 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.7.0",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.12.0",
     "mysql2": "^3.14.2",
     "nodemailer": "^7.0.9",
     "nodemon": "^3.1.10"

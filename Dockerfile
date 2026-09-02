@@ -17,5 +17,5 @@ COPY . .
 ENV NODE_ENV=production
 EXPOSE 5000
 
-# Run the server with seeding
-CMD ["sh", "-c", "node dbSeed.js && node index.js"]
+# Run the server
+CMD ["node", "index.js"]
