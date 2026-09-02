@@ -1,12 +1,27 @@
 // dbSeed.js
 require("dotenv").config();
+const mysql = require("mysql2");
 const bcrypt = require("bcryptjs");
-const promisePool = require("./DB");
 
 async function seedDatabase() {
   console.log("🌱 Starting database initialization and seeding...");
 
   try {
+    const dbName = process.env.MYSQL_DATABASE || "taekmo";
+
+    // 0. Ensure Database Exists
+    const rootConn = mysql.createConnection({
+      host: process.env.MYSQL_HOST || "127.0.0.1",
+      user: process.env.MYSQL_USER || "root",
+      password: process.env.MYSQL_PASSWORD || "",
+      port: Number(process.env.DB_PORT) || 3306,
+    }).promise();
+
+    await rootConn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    await rootConn.end();
+
+    const promisePool = require("./DB");
+
     // 1. Create Tables if they don't exist
     console.log("🏗️ Creating tables...");
 
@@ -28,7 +43,10 @@ async function seedDatabase() {
       CREATE TABLE IF NOT EXISTS barcodes (
         id VARCHAR(36) PRIMARY KEY,
         barcode VARCHAR(255) NOT NULL UNIQUE,
-        barcode_grade VARCHAR(50) NOT NULL,
+        brand VARCHAR(100) NOT NULL DEFAULT 'TAEKMO',
+        barcode_grade VARCHAR(50) NOT NULL DEFAULT 'A',
+        rated_power VARCHAR(100) NOT NULL DEFAULT '650 W',
+        export_country VARCHAR(100) NOT NULL DEFAULT 'Pakistan',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -79,10 +97,28 @@ async function seedDatabase() {
       ["Admin", adminEmail, hashedPassword]
     );
 
+    // 6. Insert Sample Barcodes (including reference serial number)
+    console.log("📦 Creating sample authentic barcodes...");
+    const sampleBarcodes = [
+      ["UUID()", "2604D72F2880706238", "TAEKMO", "A", "650 W", "Pakistan"],
+      ["UUID()", "2570107610002292", "TAEKMO", "A", "650 W", "Pakistan"],
+      ["UUID()", "TK650M10144H001928", "TAEKMO", "A", "650 W", "Pakistan"],
+      ["UUID()", "TK585M10144H004821", "TAEKMO", "A", "585 W", "Pakistan"],
+      ["UUID()", "TK700M12132H009123", "TAEKMO", "A+", "700 W", "Pakistan"]
+    ];
+
+    for (const item of sampleBarcodes) {
+      await promisePool.query(
+        "INSERT INTO barcodes (id, barcode, brand, barcode_grade, rated_power, export_country) VALUES (UUID(), ?, ?, ?, ?, ?)",
+        [item[1], item[2], item[3], item[4], item[5]]
+      );
+    }
+
     console.log("\n✅ Database initialized and seeded successfully!");
     console.log("--------------------------------");
     console.log(`Admin Email: ${adminEmail} (check .env for custom email)`);
     console.log(`Admin Password: ${adminPassword}`);
+    console.log(`Sample Barcode: 2604D72F2880706238 (TAEKMO, 650 W, Grade A, Pakistan)`);
     console.log("--------------------------------");
 
   } catch (error) {

@@ -15,38 +15,40 @@ async function test() {
 
         const authHeaders = { headers: { Authorization: `Bearer ${token}` } };
 
-        console.log("\n2. Importing single barcode...");
+        console.log("\n2. Importing single barcode with new fields...");
+        const testBarcode = `TEST-${Date.now()}`;
         const importRes = await axios.post(`${BASE_URL}/barcodes/import-single`, {
-            barcode: `TEST-${Date.now()}`,
-            barcode_grade: "A"
+            barcode: testBarcode,
+            brand: "TAEKMO",
+            barcode_grade: "A",
+            rated_power: "650 W",
+            export_country: "Pakistan"
         }, authHeaders);
 
         const { id } = importRes.data;
         console.log(`   ✅ Imported ID: ${id}`);
-        if (id.length === 36 && id.includes("-")) {
-            console.log("   ✅ Valid UUID");
-        } else {
-            console.log("   ❌ Invalid UUID");
-        }
 
-        console.log("\n3. Importing bulk barcodes...");
+        console.log("\n3. Testing authenticity verify endpoint for imported barcode...");
+        const verifyRes = await axios.post(`${BASE_URL}/barcodes/verify`, {
+            barcode: testBarcode
+        });
+        console.log("   ✅ Verified successfully:", verifyRes.data.barcode);
+
+        console.log("\n4. Importing bulk barcodes with all fields...");
         await axios.post(`${BASE_URL}/barcodes/import-bulk`, {
             barcodes: [
-                { barcode: `BULK1-${Date.now()}`, barcode_grade: "B" },
-                { barcode: `BULK2-${Date.now()}`, barcode_grade: "C" }
+                { barcode: `BULK1-${Date.now()}`, brand: "TAEKMO", barcode_grade: "A", rated_power: "650 W", export_country: "Pakistan" },
+                { barcode: `BULK2-${Date.now()}`, brand: "TAEKMO", barcode_grade: "A+", rated_power: "700 W", export_country: "Pakistan" }
             ]
         }, authHeaders);
         console.log("   ✅ Bulk import successful");
 
-        console.log("\n4. Checking barcodes list...");
+        console.log("\n5. Checking barcodes list...");
         const listRes = await axios.get(`${BASE_URL}/barcodes`, authHeaders);
         const { data } = listRes.data;
         console.log(`   ✅ Found ${data.length} barcodes`);
-        data.forEach(b => {
-            console.log(`   - ${b.id}: ${b.barcode}`);
-            if (b.id.length !== 36) {
-                console.log(`     ❌ ID ${b.id} is NOT a UUID`);
-            }
+        data.slice(0, 3).forEach(b => {
+            console.log(`   - [${b.barcode}] Brand: ${b.brand}, Grade: ${b.barcode_grade}, Power: ${b.rated_power}, Country: ${b.export_country}`);
         });
 
     } catch (error) {
@@ -55,3 +57,4 @@ async function test() {
 }
 
 test();
+

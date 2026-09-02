@@ -148,6 +148,49 @@ const authenticateToken = (req, res, next) => {
   }
 };
 
+// ===================== DB AUTO MIGRATION =====================
+async function ensureDatabaseSchema() {
+  try {
+    // 1. Ensure barcodes table exists
+    await promisePool.query(`
+      CREATE TABLE IF NOT EXISTS barcodes (
+        id VARCHAR(36) PRIMARY KEY,
+        barcode VARCHAR(255) NOT NULL UNIQUE,
+        brand VARCHAR(100) NOT NULL DEFAULT 'TAEKMO',
+        barcode_grade VARCHAR(50) NOT NULL DEFAULT 'A',
+        rated_power VARCHAR(100) NOT NULL DEFAULT '650 W',
+        export_country VARCHAR(100) NOT NULL DEFAULT 'Pakistan',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 2. Check and add any missing columns in existing barcodes table
+    const [columns] = await promisePool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'barcodes'
+    `);
+    const existingColumns = new Set(columns.map(c => c.COLUMN_NAME.toLowerCase()));
+
+    if (!existingColumns.has('brand')) {
+      console.log("➕ Adding missing column 'brand' to barcodes table...");
+      await promisePool.query("ALTER TABLE barcodes ADD COLUMN brand VARCHAR(100) NOT NULL DEFAULT 'TAEKMO'");
+    }
+    if (!existingColumns.has('rated_power')) {
+      console.log("➕ Adding missing column 'rated_power' to barcodes table...");
+      await promisePool.query("ALTER TABLE barcodes ADD COLUMN rated_power VARCHAR(100) NOT NULL DEFAULT '650 W'");
+    }
+    if (!existingColumns.has('export_country')) {
+      console.log("➕ Adding missing column 'export_country' to barcodes table...");
+      await promisePool.query("ALTER TABLE barcodes ADD COLUMN export_country VARCHAR(100) NOT NULL DEFAULT 'Pakistan'");
+    }
+
+    console.log("✅ Database schema verified and up-to-date");
+  } catch (err) {
+    console.error("⚠️ Database schema check warning:", err.message);
+  }
+}
+
 // ===================== BARCODES =====================
 
 // Get all barcodes with pagination
@@ -165,7 +208,7 @@ app.get("/barcodes", authenticateToken, async (req, res) => {
 
     // Get paginated data
     const [rows] = await promisePool.query(
-      "SELECT * FROM barcodes ORDER BY created_at DESC LIMIT ? OFFSET ?",
+      "SELECT id, barcode, brand, barcode_grade, rated_power, export_country, created_at FROM barcodes ORDER BY created_at DESC LIMIT ? OFFSET ?",
       [limit, offset]
     );
 
@@ -192,20 +235,24 @@ app.get("/barcodes/search", authenticateToken, async (req, res) => {
 
   const limit = parseInt(lastcount) || 10;
   const offset = parseInt(skipcount) || 0;
-  const searchQuery = `%${query || ""}%`;
+  const searchQuery = `%${(query || "").trim()}%`;
 
   try {
     // Get total count for search query
     const [countRows] = await promisePool.query(
-      "SELECT COUNT(*) as total FROM barcodes WHERE barcode LIKE ?",
-      [searchQuery]
+      `SELECT COUNT(*) as total FROM barcodes 
+       WHERE barcode LIKE ? OR brand LIKE ? OR barcode_grade LIKE ? OR rated_power LIKE ? OR export_country LIKE ?`,
+      [searchQuery, searchQuery, searchQuery, searchQuery, searchQuery]
     );
     const totalCount = countRows[0].total;
 
     // Get matched data
     const [rows] = await promisePool.query(
-      "SELECT * FROM barcodes WHERE barcode LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-      [searchQuery, limit, offset]
+      `SELECT id, barcode, brand, barcode_grade, rated_power, export_country, created_at 
+       FROM barcodes 
+       WHERE barcode LIKE ? OR brand LIKE ? OR barcode_grade LIKE ? OR rated_power LIKE ? OR export_country LIKE ? 
+       ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [searchQuery, searchQuery, searchQuery, searchQuery, searchQuery, limit, offset]
     );
 
     res.status(200).json({
@@ -227,32 +274,50 @@ app.get("/barcodes/search", authenticateToken, async (req, res) => {
 
 // Import single barcode
 app.post("/barcodes/import-single", authenticateToken, async (req, res) => {
-  const { barcode, barcode_grade } = req.body;
-  if (!barcode || !barcode_grade) {
-    return res.status(400).json({ statusCode: 400, message: "Barcode and barcode_grade are required" });
+  const { barcode, brand, barcode_grade, rated_power, export_country } = req.body;
+  if (!barcode) {
+    return res.status(400).json({ statusCode: 400, message: "Barcode is required" });
   }
+
+  const cleanBarcode = barcode.trim();
+  const cleanBrand = (brand || "TAEKMO").trim();
+  const cleanGrade = (barcode_grade || "A").trim();
+  const cleanRatedPower = (rated_power || "650 W").trim();
+  const cleanExportCountry = (export_country || "Pakistan").trim();
 
   try {
     // Check if barcode already exists
     const [existing] = await promisePool.query(
       "SELECT id FROM barcodes WHERE barcode = ?",
-      [barcode]
+      [cleanBarcode]
     );
 
     if (existing.length > 0) {
       return res.status(400).json({
         statusCode: 400,
         message: "Barcode already exists",
-        duplicate: barcode
+        duplicate: cleanBarcode
       });
     }
 
     const id = crypto.randomUUID();
     await promisePool.query(
-      "INSERT INTO barcodes (id, barcode, barcode_grade) VALUES (?, ?, ?)",
-      [id, barcode, barcode_grade]
+      "INSERT INTO barcodes (id, barcode, brand, barcode_grade, rated_power, export_country) VALUES (?, ?, ?, ?, ?, ?)",
+      [id, cleanBarcode, cleanBrand, cleanGrade, cleanRatedPower, cleanExportCountry]
     );
-    res.status(201).json({ statusCode: 201, message: "Barcode created successfully", id });
+    res.status(201).json({
+      statusCode: 201,
+      message: "Barcode created successfully",
+      id,
+      barcode: {
+        id,
+        barcode: cleanBarcode,
+        brand: cleanBrand,
+        barcode_grade: cleanGrade,
+        rated_power: cleanRatedPower,
+        export_country: cleanExportCountry
+      }
+    });
   } catch (error) {
     console.error("Import single barcode error:", error);
     res.status(500).json({ statusCode: 500, message: "Failed to import barcode", error: error.message });
@@ -275,7 +340,9 @@ app.post("/barcodes/import-bulk", authenticateToken, async (req, res) => {
     // Process barcodes in batches
     for (let i = 0; i < barcodes.length; i += BATCH_SIZE) {
       const batch = barcodes.slice(i, i + BATCH_SIZE);
-      const barcodeValues = batch.map(b => b.barcode);
+      const barcodeValues = batch.map(b => String(b.barcode || "").trim()).filter(Boolean);
+
+      if (barcodeValues.length === 0) continue;
 
       // Check for existing barcodes in database for this batch
       const [existingBarcodes] = await promisePool.query(
@@ -283,23 +350,36 @@ app.post("/barcodes/import-bulk", authenticateToken, async (req, res) => {
         [barcodeValues]
       );
 
-      const existingSet = new Set(existingBarcodes.map(row => row.barcode));
+      const existingSet = new Set(existingBarcodes.map(row => row.barcode.trim().toUpperCase()));
 
       // Filter out duplicates in this batch
-      const newBarcodes = batch.filter(b => !existingSet.has(b.barcode));
-      const duplicates = batch.filter(b => existingSet.has(b.barcode));
+      const newBarcodes = batch.filter(b => {
+        const val = String(b.barcode || "").trim();
+        return val && !existingSet.has(val.toUpperCase());
+      });
+      const duplicates = batch.filter(b => {
+        const val = String(b.barcode || "").trim();
+        return val && existingSet.has(val.toUpperCase());
+      });
 
       // Track duplicates
       if (duplicates.length > 0) {
-        allDuplicates.push(...duplicates.map(b => b.barcode));
+        allDuplicates.push(...duplicates.map(b => String(b.barcode || "").trim()));
         totalSkipped += duplicates.length;
       }
 
       // Insert only new barcodes from this batch
       if (newBarcodes.length > 0) {
-        const values = newBarcodes.map(b => [crypto.randomUUID(), b.barcode, b.barcode_grade]);
+        const values = newBarcodes.map(b => [
+          crypto.randomUUID(),
+          String(b.barcode || "").trim(),
+          String(b.brand || "TAEKMO").trim(),
+          String(b.barcode_grade || b.grade || "A").trim(),
+          String(b.rated_power || b.power || "650 W").trim(),
+          String(b.export_country || b.country || "Pakistan").trim()
+        ]);
         await promisePool.query(
-          "INSERT INTO barcodes (id, barcode, barcode_grade) VALUES ?",
+          "INSERT INTO barcodes (id, barcode, brand, barcode_grade, rated_power, export_country) VALUES ?",
           [values]
         );
         totalInserted += newBarcodes.length;
@@ -316,7 +396,7 @@ app.post("/barcodes/import-bulk", authenticateToken, async (req, res) => {
     if (totalInserted === 0) {
       return res.status(400).json({
         statusCode: 400,
-        message: "All barcodes already exist",
+        message: "All barcodes already exist in system",
         duplicates: allDuplicates,
         duplicateCount: totalSkipped
       });
@@ -332,7 +412,6 @@ app.post("/barcodes/import-bulk", authenticateToken, async (req, res) => {
 
     // Include duplicate information if any were skipped
     if (totalSkipped > 0) {
-      // Only include first 100 duplicates to avoid huge response
       response.duplicates = allDuplicates.slice(0, 100);
       if (allDuplicates.length > 100) {
         response.duplicatesShown = 100;
@@ -351,21 +430,40 @@ app.post("/barcodes/import-bulk", authenticateToken, async (req, res) => {
 // Verify barcode
 app.post("/barcodes/verify", async (req, res) => {
   const { barcode } = req.body;
-  if (!barcode) {
-    return res.status(400).json({ statusCode: 400, message: "Barcode is required" });
+  if (!barcode || !String(barcode).trim()) {
+    return res.status(400).json({ statusCode: 400, message: "Serial number / Barcode is required" });
   }
+
+  const cleanBarcode = String(barcode).trim();
 
   try {
     const [rows] = await promisePool.query(
-      "SELECT * FROM barcodes WHERE barcode = ?",
-      [barcode]
+      "SELECT id, barcode, brand, barcode_grade, rated_power, export_country, created_at FROM barcodes WHERE LOWER(barcode) = LOWER(?)",
+      [cleanBarcode]
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({ statusCode: 404, message: "Barcode not found" });
+      return res.status(404).json({
+        statusCode: 404,
+        message: "Panel not found",
+        searchedBarcode: cleanBarcode
+      });
     }
 
-    res.status(200).json({ statusCode: 200, message: "Barcode verified", barcode: rows[0] });
+    const found = rows[0];
+    res.status(200).json({
+      statusCode: 200,
+      message: "Panel verified",
+      barcode: {
+        id: found.id,
+        barcode: found.barcode,
+        brand: found.brand || "TAEKMO",
+        barcode_grade: found.barcode_grade || "A",
+        rated_power: found.rated_power || "650 W",
+        export_country: found.export_country || "Pakistan",
+        created_at: found.created_at
+      }
+    });
   } catch (error) {
     console.error("Verify barcode error:", error);
     res.status(500).json({ statusCode: 500, message: "Failed to verify barcode", error: error.message });
@@ -457,6 +555,7 @@ app.use((req, res) => {
 });
 
 // START SERVER
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`✅ Server running at port ${PORT}`);
+  await ensureDatabaseSchema();
 });
